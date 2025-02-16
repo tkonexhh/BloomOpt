@@ -34,6 +34,9 @@ namespace UnityEngine.Rendering.Universal
         [Tooltip("Amount of dirtiness.")]
         public MinFloatParameter dirtIntensity = new MinFloatParameter(0f, 0f);
 
+
+        public IntParameter downSample = new IntParameter(2);
+        public FloatParameter sigma = new FloatParameter(1f);
         public bool IsActive() => intensity.value > 0f;
 
         public bool IsTileCompatible() => false;

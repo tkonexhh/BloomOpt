@@ -132,6 +132,14 @@ namespace UnityEngine.Rendering.Universal.Internal
                 ShaderConstants._BloomMipUp[i] = Shader.PropertyToID("_BloomMipUp" + i);
                 ShaderConstants._BloomMipDown[i] = Shader.PropertyToID("_BloomMipDown" + i);
             }
+            
+            // Mark
+            ShaderConstants._BloomOptMipUp = new int[k_MaxPyramidSize];
+            for (int i = 0; i < k_MaxPyramidSize; i++)
+            {
+                ShaderConstants._BloomOptMipUp[i] = Shader.PropertyToID("_BloomOptMipUp" + i);
+            }
+            ShaderConstants._BloomOptMipDown = Shader.PropertyToID("_BloomOptMipDown");
 
             m_MRT2 = new RenderTargetIdentifier[2];
             m_ResetHistory = true;
@@ -505,7 +513,8 @@ namespace UnityEngine.Rendering.Universal.Internal
                 if (bloomActive)
                 {
                     using (new ProfilingScope(cmd, ProfilingSampler.Get(URPProfileId.Bloom)))
-                        SetupBloom(cmd, GetSource(), m_Materials.uber);
+                        // SetupBloom(cmd, GetSource(), m_Materials.uber);
+                        SetupBloomOpt(cmd, GetSource(), m_Materials.uber);
                 }
 
                 // Setup other effects constants
@@ -1103,6 +1112,119 @@ namespace UnityEngine.Rendering.Universal.Internal
 
         #region Bloom
 
+        void SetupBloomOpt(CommandBuffer cmd, RenderTargetIdentifier source, Material uberMaterial)
+        {
+            // Start at half-res
+            int tw = m_Descriptor.width >> 1;
+            int th = m_Descriptor.height >> 1;
+
+            // Determine the iteration count
+            int maxSize = Mathf.Max(tw, th);
+            int iterations = Mathf.FloorToInt(Mathf.Log(maxSize, 2f) - 1);
+            iterations -= m_Bloom.skipIterations.value;
+            int mipCount = Mathf.Clamp(iterations, 1, k_MaxPyramidSize);
+
+            // Pre-filtering parameters
+            float clamp = m_Bloom.clamp.value;
+            float threshold = Mathf.GammaToLinearSpace(m_Bloom.threshold.value);
+            float thresholdKnee = threshold * 0.5f; // Hardcoded soft knee
+
+            // Material setup
+            float scatter = Mathf.Lerp(0.05f, 0.95f, m_Bloom.scatter.value);
+            var bloomMaterial = m_Materials.bloom;
+            bloomMaterial.SetVector(ShaderConstants._Params, new Vector4(scatter, clamp, threshold, thresholdKnee));
+            CoreUtils.SetKeyword(bloomMaterial, ShaderKeywordStrings.BloomHQ, m_Bloom.highQualityFiltering.value);
+            CoreUtils.SetKeyword(bloomMaterial, ShaderKeywordStrings.UseRGBM, m_UseRGBM);
+            
+            var desc1 = GetCompatibleDescriptor(tw, th, m_DefaultHDRFormat);
+            cmd.GetTemporaryRT(ShaderConstants._BloomOptMipUp[0], desc1, FilterMode.Bilinear);
+            var desc2 = desc1;
+            desc2.useMipMap = true;
+            desc2.autoGenerateMips = true;
+            cmd.GetTemporaryRT(ShaderConstants._BloomOptMipDown, desc2, FilterMode.Bilinear);
+            for (int i = 1; i < mipCount; i++)
+            {
+                tw = (int)Mathf.Max(1, tw / m_Bloom.downSample.value);
+                th = (int)Mathf.Max(1, th / m_Bloom.downSample.value);
+                desc1.width = tw;
+                desc1.height = th;
+                cmd.GetTemporaryRT(ShaderConstants._BloomOptMipUp[i], desc1, FilterMode.Bilinear);
+            }
+            
+            var bloomOptMaterial = m_Materials.bloomOpt;
+            cmd.SetGlobalTexture("_BlitTex", source);
+            cmd.Blit(source, ShaderConstants._BloomOptMipDown, bloomMaterial, 0);
+            cmd.SetGlobalTexture("_BloomOptMipDownTex", ShaderConstants._BloomOptMipDown);
+            // cmd.Blit(ShaderConstants._BloomOptMipDown, ShaderConstants._BloomOptMipUp[0]);
+            
+            cmd.SetGlobalInt(ShaderConstants._MipLevel, mipCount - 1);
+            cmd.Blit(ShaderConstants._BloomOptMipDown, ShaderConstants._BloomOptMipUp[mipCount - 1], bloomOptMaterial, 5);
+            cmd.SetGlobalInt(ShaderConstants._MipCount, mipCount);
+            cmd.SetGlobalFloat(ShaderConstants._MipSigma, m_Bloom.sigma.value);
+            
+            for (int i = mipCount - 2; i >= 0; i--)
+            {
+                cmd.SetGlobalInt(ShaderConstants._MipLevel, i);
+                int low = ShaderConstants._BloomOptMipUp[i + 1];
+                int high = ShaderConstants._BloomOptMipUp[i];
+                cmd.SetGlobalTexture(ShaderConstants._MipUpLowTex, low);
+                cmd.Blit(ShaderConstants._BloomOptMipDown, high, bloomOptMaterial, 4);
+            }
+            
+            // Cleanup
+            cmd.ReleaseTemporaryRT(ShaderConstants._BloomOptMipDown);
+            for (int i = 0; i < mipCount; i++)
+            {
+                if (i > 0) cmd.ReleaseTemporaryRT(ShaderConstants._BloomOptMipUp[i]);
+            }
+            // for (int i = 0; i < mipCount; i++)
+            // {
+            //     cmd.ReleaseTemporaryRT(ShaderConstants._BloomMipDown[i]);
+            //     if (i > 0) cmd.ReleaseTemporaryRT(ShaderConstants._BloomMipUp[i]);
+            // }
+
+            // Setup bloom on uber
+            var tint = m_Bloom.tint.value.linear;
+            var luma = ColorUtils.Luminance(tint);
+            tint = luma > 0f ? tint * (1f / luma) : Color.white;
+
+            var bloomParams = new Vector4(m_Bloom.intensity.value, tint.r, tint.g, tint.b);
+            uberMaterial.SetVector(ShaderConstants._Bloom_Params, bloomParams);
+            uberMaterial.SetFloat(ShaderConstants._Bloom_RGBM, m_UseRGBM ? 1f : 0f);
+
+            cmd.SetGlobalTexture(ShaderConstants._Bloom_Texture, ShaderConstants._BloomOptMipUp[0]);
+
+            // Setup lens dirtiness on uber
+            // Keep the aspect ratio correct & center the dirt texture, we don't want it to be
+            // stretched or squashed
+            var dirtTexture = m_Bloom.dirtTexture.value == null ? Texture2D.blackTexture : m_Bloom.dirtTexture.value;
+            float dirtRatio = dirtTexture.width / (float)dirtTexture.height;
+            float screenRatio = m_Descriptor.width / (float)m_Descriptor.height;
+            var dirtScaleOffset = new Vector4(1f, 1f, 0f, 0f);
+            float dirtIntensity = m_Bloom.dirtIntensity.value;
+
+            if (dirtRatio > screenRatio)
+            {
+                dirtScaleOffset.x = screenRatio / dirtRatio;
+                dirtScaleOffset.z = (1f - dirtScaleOffset.x) * 0.5f;
+            }
+            else if (screenRatio > dirtRatio)
+            {
+                dirtScaleOffset.y = dirtRatio / screenRatio;
+                dirtScaleOffset.w = (1f - dirtScaleOffset.y) * 0.5f;
+            }
+
+            uberMaterial.SetVector(ShaderConstants._LensDirt_Params, dirtScaleOffset);
+            uberMaterial.SetFloat(ShaderConstants._LensDirt_Intensity, dirtIntensity);
+            uberMaterial.SetTexture(ShaderConstants._LensDirt_Texture, dirtTexture);
+
+            // Keyword setup - a bit convoluted as we're trying to save some variants in Uber...
+            if (m_Bloom.highQualityFiltering.value)
+                uberMaterial.EnableKeyword(dirtIntensity > 0f ? ShaderKeywordStrings.BloomHQDirt : ShaderKeywordStrings.BloomHQ);
+            else
+                uberMaterial.EnableKeyword(dirtIntensity > 0f ? ShaderKeywordStrings.BloomLQDirt : ShaderKeywordStrings.BloomLQ);
+        }
+        
         void SetupBloom(CommandBuffer cmd, RenderTargetIdentifier source, Material uberMaterial)
         {
             // Start at half-res
@@ -1583,6 +1705,7 @@ namespace UnityEngine.Rendering.Universal.Internal
             public readonly Material cameraMotionBlur;
             public readonly Material paniniProjection;
             public readonly Material bloom;
+            public readonly Material bloomOpt;
             public readonly Material scalingSetup;
             public readonly Material easu;
             public readonly Material uber;
@@ -1602,6 +1725,7 @@ namespace UnityEngine.Rendering.Universal.Internal
                 cameraMotionBlur = Load(data.shaders.cameraMotionBlurPS);
                 paniniProjection = Load(data.shaders.paniniProjectionPS);
                 bloom = Load(data.shaders.bloomPS);
+                bloomOpt = Load(data.shaders.bloomOptPS);
                 scalingSetup = Load(data.shaders.scalingSetupPS);
                 easu = Load(data.shaders.easuPS);
                 uber = Load(data.shaders.uberPostPS);
@@ -1703,6 +1827,15 @@ namespace UnityEngine.Rendering.Universal.Internal
 
             public static int[] _BloomMipUp;
             public static int[] _BloomMipDown;
+            
+            //Mark
+            public static int[] _BloomOptMipUp;
+            public static int _BloomOptMipDown;
+            
+            public static readonly int _MipLevel = Shader.PropertyToID("_MipLevel");
+            public static readonly int _MipCount = Shader.PropertyToID("_MipCount");
+            public static readonly int _MipSigma = Shader.PropertyToID("_MipSigma");
+            public static readonly int _MipUpLowTex = Shader.PropertyToID("_MipUpLowTex");
         }
 
         #endregion
