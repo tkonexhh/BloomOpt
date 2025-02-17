@@ -16,6 +16,10 @@ namespace UnityEditor.Rendering.Universal
         SerializedDataParameter m_SkipIterations;
         SerializedDataParameter m_DirtTexture;
         SerializedDataParameter m_DirtIntensity;
+        
+        SerializedDataParameter m_UseOpt;
+        SerializedDataParameter m_DownSample;
+        SerializedDataParameter m_Sigma;
 
         public override void OnEnable()
         {
@@ -30,6 +34,10 @@ namespace UnityEditor.Rendering.Universal
             m_SkipIterations = Unpack(o.Find(x => x.skipIterations));
             m_DirtTexture = Unpack(o.Find(x => x.dirtTexture));
             m_DirtIntensity = Unpack(o.Find(x => x.dirtIntensity));
+            
+            m_UseOpt= Unpack(o.Find(x => x.useOpt));
+            m_DownSample= Unpack(o.Find(x => x.downSample));
+            m_Sigma= Unpack(o.Find(x => x.sigma));
         }
 
         public override void OnInspectorGUI()
@@ -48,6 +56,10 @@ namespace UnityEditor.Rendering.Universal
 
             PropertyField(m_DirtTexture);
             PropertyField(m_DirtIntensity);
+            
+            PropertyField(m_UseOpt);
+            PropertyField(m_DownSample);
+            PropertyField(m_Sigma);
         }
     }
 }

@@ -513,8 +513,13 @@ namespace UnityEngine.Rendering.Universal.Internal
                 if (bloomActive)
                 {
                     using (new ProfilingScope(cmd, ProfilingSampler.Get(URPProfileId.Bloom)))
-                        // SetupBloom(cmd, GetSource(), m_Materials.uber);
-                        SetupBloomOpt(cmd, GetSource(), m_Materials.uber);
+                    { 
+                        if( m_Bloom.useOpt.value) 
+                            SetupBloomOpt(cmd, GetSource(), m_Materials.uber);
+                        else
+                            SetupBloom(cmd, GetSource(), m_Materials.uber);
+                    }
+
                 }
 
                 // Setup other effects constants
@@ -1131,7 +1136,7 @@ namespace UnityEngine.Rendering.Universal.Internal
 
             // Material setup
             float scatter = Mathf.Lerp(0.05f, 0.95f, m_Bloom.scatter.value);
-            var bloomMaterial = m_Materials.bloom;
+            var bloomMaterial = m_Materials.bloomOpt;
             bloomMaterial.SetVector(ShaderConstants._Params, new Vector4(scatter, clamp, threshold, thresholdKnee));
             CoreUtils.SetKeyword(bloomMaterial, ShaderKeywordStrings.BloomHQ, m_Bloom.highQualityFiltering.value);
             CoreUtils.SetKeyword(bloomMaterial, ShaderKeywordStrings.UseRGBM, m_UseRGBM);
@@ -1152,16 +1157,16 @@ namespace UnityEngine.Rendering.Universal.Internal
             }
             
             var bloomOptMaterial = m_Materials.bloomOpt;
-            cmd.SetGlobalTexture("_BlitTex", source);
+            // Prefilter 使用带Mipmap的RT 省去下采样部分
             cmd.Blit(source, ShaderConstants._BloomOptMipDown, bloomMaterial, 0);
             cmd.SetGlobalTexture("_BloomOptMipDownTex", ShaderConstants._BloomOptMipDown);
-            // cmd.Blit(ShaderConstants._BloomOptMipDown, ShaderConstants._BloomOptMipUp[0]);
             
+            // UpSample
             cmd.SetGlobalInt(ShaderConstants._MipLevel, mipCount - 1);
             cmd.Blit(ShaderConstants._BloomOptMipDown, ShaderConstants._BloomOptMipUp[mipCount - 1], bloomOptMaterial, 5);
             cmd.SetGlobalInt(ShaderConstants._MipCount, mipCount);
             cmd.SetGlobalFloat(ShaderConstants._MipSigma, m_Bloom.sigma.value);
-            
+
             for (int i = mipCount - 2; i >= 0; i--)
             {
                 cmd.SetGlobalInt(ShaderConstants._MipLevel, i);
@@ -1177,11 +1182,6 @@ namespace UnityEngine.Rendering.Universal.Internal
             {
                 if (i > 0) cmd.ReleaseTemporaryRT(ShaderConstants._BloomOptMipUp[i]);
             }
-            // for (int i = 0; i < mipCount; i++)
-            // {
-            //     cmd.ReleaseTemporaryRT(ShaderConstants._BloomMipDown[i]);
-            //     if (i > 0) cmd.ReleaseTemporaryRT(ShaderConstants._BloomMipUp[i]);
-            // }
 
             // Setup bloom on uber
             var tint = m_Bloom.tint.value.linear;

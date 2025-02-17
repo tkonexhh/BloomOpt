@@ -169,9 +169,45 @@ Shader "Hidden/Universal Render Pipeline/BloomOpt"
         float _MipSigma = 2.0;
         uint _MipLevel;
         uint _MipCount;
+
+        float GaussianExp(float sigma2, uint level)
+        {
+            return -(1 << (level << 1)) / (4.0 * PI * sigma2);
+        };
+
+        float GaussianBasis(float sigma2, uint level)
+        {
+            return level < 0.0 ? 0.0 : exp(GaussianExp(sigma2, level));
+        };
+
+        float MipGaussianWeight(float sigma2, uint level)
+        {
+            const float g = GaussianBasis(sigma2, level);
+
+            return (1 << (level << 2)) * g;
+        }
+        
+        float MipGaussianBlendWeight()
+        {
+            const float sigma  = _MipSigma;
+            const float sigma2 = sigma * sigma;
+            float       wsum   = 0.0, weight = 0.0;
+            for (uint i = _MipLevel; i < _MipCount; ++i)
+            {
+                const float w = MipGaussianWeight(sigma2, i);
+                weight        = i == _MipLevel ? w : weight;
+                wsum += w;
+            }
+
+            return wsum > 0.0 ? weight / wsum : 1.0;
+        }
+
         
         float MipGaussianBlendWeight(float2 uv, float sigma, int mipLevel, int mipCount)
         {
+      //       const float2 r = (2.0 * uv - 1.0) ;
+		    // sigma *= dot(r, r);
+            
             uint g_level = mipLevel;
             const float sigma2 = sigma * sigma;
             const float c = 4.0 * PI * sigma2;
@@ -180,11 +216,18 @@ Shader "Hidden/Universal Render Pipeline/BloomOpt"
             return saturate(numerator / denorminator);
         }
 
+         half4 FragUpsampleOpt2(Varyings input) : SV_Target
+        {
+            const float3 src = SAMPLE_TEXTURE2D_X_LOD(_BloomOptMipDownTex, sampler_LinearClamp, input.uv, _MipLevel);
+            return float4(src, 1.0);
+        }
+
         half4 FragUpsampleOpt(Varyings input) : SV_Target
         {
             const float3 src = SAMPLE_TEXTURE2D_X_LOD(_BloomOptMipDownTex, sampler_LinearClamp, input.uv, _MipLevel);
             const float3 coarser = SAMPLE_TEXTURE2D_X(_MipUpLowTex, sampler_LinearClamp, input.uv);
-            const float weight = MipGaussianBlendWeight(input.uv, _MipSigma, _MipLevel, _MipCount);
+            // const float weight = MipGaussianBlendWeight(input.uv, _MipSigma, _MipLevel, _MipCount);
+            const float weight = MipGaussianBlendWeight();
             return float4(lerp(coarser, src, weight), 1.0);
         }
 
@@ -240,7 +283,7 @@ Shader "Hidden/Universal Render Pipeline/BloomOpt"
 
         Pass
         {
-            Name "Bloom Upsample"
+            Name "Bloom Upsample Opt"
 
             HLSLPROGRAM
                 #pragma vertex FullscreenVert
@@ -251,11 +294,11 @@ Shader "Hidden/Universal Render Pipeline/BloomOpt"
 
         Pass
         {
-            Name "Bloom Upsample Opt"
+            Name "Bloom Upsample Opt2"
 
             HLSLPROGRAM
                 #pragma vertex FullscreenVert
-                #pragma fragment FragUpsampleOpt
+                #pragma fragment FragUpsampleOpt2
                 #pragma multi_compile_local _ _BLOOM_HQ
             ENDHLSL
         }

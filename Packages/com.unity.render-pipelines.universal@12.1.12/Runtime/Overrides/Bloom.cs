@@ -35,7 +35,8 @@ namespace UnityEngine.Rendering.Universal
         public MinFloatParameter dirtIntensity = new MinFloatParameter(0f, 0f);
 
 
-        public IntParameter downSample = new IntParameter(2);
+        public BoolParameter useOpt = new BoolParameter(false);
+        public ClampedIntParameter downSample = new ClampedIntParameter(1,1,4);
         public FloatParameter sigma = new FloatParameter(1f);
         public bool IsActive() => intensity.value > 0f;
 
