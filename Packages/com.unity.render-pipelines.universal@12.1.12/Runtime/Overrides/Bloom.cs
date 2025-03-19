@@ -36,7 +36,7 @@ namespace UnityEngine.Rendering.Universal
 
 
         public BoolParameter useOpt = new BoolParameter(false);
-        public ClampedIntParameter downSample = new ClampedIntParameter(1,1,4);
+        public ClampedIntParameter downSample = new ClampedIntParameter(1, 0, 2);
         public FloatParameter sigma = new FloatParameter(1f);
         public bool IsActive() => intensity.value > 0f;
 

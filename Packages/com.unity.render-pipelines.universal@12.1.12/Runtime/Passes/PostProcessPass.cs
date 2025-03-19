@@ -1147,10 +1147,14 @@ namespace UnityEngine.Rendering.Universal.Internal
             desc2.useMipMap = true;
             desc2.autoGenerateMips = true;
             cmd.GetTemporaryRT(ShaderConstants._BloomOptMipDown, desc2, FilterMode.Bilinear);
+
             for (int i = 1; i < mipCount; i++)
             {
-                tw = (int)Mathf.Max(1, tw / m_Bloom.downSample.value);
-                th = (int)Mathf.Max(1, th / m_Bloom.downSample.value);
+                // tw = (int)Mathf.Max(1, tw / m_Bloom.downSample.value);
+                // th = (int)Mathf.Max(1, th / m_Bloom.downSample.value);
+
+                tw = tw >> m_Bloom.downSample.value;
+                th = th >> m_Bloom.downSample.value;
                 desc1.width = tw;
                 desc1.height = th;
                 cmd.GetTemporaryRT(ShaderConstants._BloomOptMipUp[i], desc1, FilterMode.Bilinear);
